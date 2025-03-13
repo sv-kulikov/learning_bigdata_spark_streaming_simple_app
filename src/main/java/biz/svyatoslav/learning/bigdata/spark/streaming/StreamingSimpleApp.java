@@ -8,57 +8,84 @@ import org.apache.spark.streaming.api.java.JavaReceiverInputDStream;
 import org.apache.spark.streaming.api.java.JavaStreamingContext;
 import scala.Tuple2;
 
+import java.io.IOException;
+import java.net.Socket;
+import java.net.UnknownHostException;
 import java.util.Arrays;
 
+// If you get errors like "Exception in thread "main" java.lang.IllegalAccessError:
+//  class org.apache.spark.storage.StorageUtils$ (in unnamed module ...)
+//  cannot access class sun.nio.ch.DirectBuffer (in module java.base)
+//  because module java.base does not export sun.nio.ch to unnamed module ..."
+// Follow this advice: https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct
+// In short: add this JVM Option in IDEA IDE: "--add-exports java.base/sun.nio.ch=ALL-UNNAMED"
+
+// 1) In Linux: open terminal window (Ctrl+Alt+T).
+//    In Windows: open CMD console.
+// 2) In Linux: execute "nc -lk 9999" in terminal window.
+//    (For Linux use: sudo apt install nc -y)
+//    In Windows: execute "ncat -l -p 9999 --keep-open"
+//    (For Windows use https://nmap.org/download.html#windows)
+// 3) Run this application in IntelliJ IDEA.
+// 4) Type something like "ABC XYZ ABC DEF" in terminal window and press Enter.
+//
+// In IntelliJ IDEA you will see something like this:
+//
+// -------------------------------------------
+// Time: 1706449138000 ms
+// -------------------------------------------
+// (ABC,2)
+// (DEF,1)
+// (XYZ,1)
+
 public class StreamingSimpleApp {
+    private static final String HOST = "localhost";
+    private static final int PORT = 9999;
+
     public static void main(String[] args) {
 
-        // If you get errors like "Exception in thread "main" java.lang.IllegalAccessError:
-        //  class org.apache.spark.storage.StorageUtils$ (in unnamed module ...)
-        //  cannot access class sun.nio.ch.DirectBuffer (in module java.base)
-        //  because module java.base does not export sun.nio.ch to unnamed module ..."
-        // Follow this advice: https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct
-        // In short: add this JVM Option in IDEA IDE: "--add-exports java.base/sun.nio.ch=ALL-UNNAMED"
+        // Check if the socket server is available before starting Spark Streaming
+        if (!isPortOpen(HOST, PORT, 2000)) {
+            System.err.println("ERROR: Cannot connect to " + HOST + ":" + PORT +
+                    ". Ensure Netcat/Ncat is running before starting this application.");
+            return;
+        }
 
-
-        // 1) Open terminal window (Ctrl+Alt+T).
-        // 2) Execute "nc -lk 9999" in terminal window.
-        // 3) Run this application in IntelliJ IDEA.
-        // 4) Type something like "ABC XYZ ABC DEF" in terminal window and press Enter.
-        //
-        // In IntelliJ IDEA you will see something like this:
-        //
-        // -------------------------------------------
-        // Time: 1706449138000 ms
-        // -------------------------------------------
-        // (ABC,2)
-        // (DEF,1)
-        // (XYZ,1)
-
-        // Create a local StreamingContext with two working thread and batch interval of 1 second
         SparkConf conf = new SparkConf().setMaster("local[2]").setAppName("NetworkWordCount");
         JavaStreamingContext jssc = new JavaStreamingContext(conf, Durations.seconds(1));
 
-        // Create a DStream that will connect to hostname:port, like localhost:9999
-        JavaReceiverInputDStream<String> lines = jssc.socketTextStream("localhost", 9999);
+        // Define the input stream
+        JavaReceiverInputDStream<String> lines = jssc.socketTextStream(HOST, PORT);
 
-        // Split each line into words
+        // Process the stream
         JavaDStream<String> words = lines.flatMap(x -> Arrays.asList(x.split(" ")).iterator());
-
-        // Count each word in each batch
         JavaPairDStream<String, Integer> pairs = words.mapToPair(s -> new Tuple2<>(s, 1));
-        JavaPairDStream<String, Integer> wordCounts = pairs.reduceByKey((i1, i2) -> i1 + i2);
-
-        // Print the first ten elements of each RDD generated in this DStream to the console
+        JavaPairDStream<String, Integer> wordCounts = pairs.reduceByKey(Integer::sum);
         wordCounts.print();
 
-        // Start the computation
-        jssc.start();
+        // Start Spark Streaming
         try {
-            // Wait for the computation to terminate
+            jssc.start();
             jssc.awaitTermination();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+        } catch (Exception e) {
+            System.err.println("ERROR: An unexpected error occurred - " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            jssc.close();
         }
+    }
+
+    /**
+     * Checks if the given host and port are open.
+     */
+    private static boolean isPortOpen(String host, int port, int timeout) {
+        try (Socket socket = new Socket(host, port)) {
+            return true;
+        } catch (UnknownHostException e) {
+            System.err.println("ERROR: Unknown host " + host);
+        } catch (IOException e) {
+            return false; // Port is closed or unreachable
+        }
+        return false;
     }
 }

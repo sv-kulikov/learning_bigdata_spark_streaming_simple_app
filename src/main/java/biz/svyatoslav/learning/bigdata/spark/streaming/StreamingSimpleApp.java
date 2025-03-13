@@ -28,15 +28,6 @@ import java.util.Arrays;
 //    (For Windows use https://nmap.org/download.html#windows)
 // 3) Run this application in IntelliJ IDEA.
 // 4) Type something like "ABC XYZ ABC DEF" in terminal window and press Enter.
-//
-// In IntelliJ IDEA you will see something like this:
-//
-// -------------------------------------------
-// Time: 1706449138000 ms
-// -------------------------------------------
-// (ABC,2)
-// (DEF,1)
-// (XYZ,1)
 
 public class StreamingSimpleApp {
     private static final String HOST = "localhost";
@@ -49,9 +40,15 @@ public class StreamingSimpleApp {
             System.err.println("ERROR: Cannot connect to " + HOST + ":" + PORT +
                     ". Ensure Netcat/Ncat is running before starting this application.");
             return;
+        } else {
+            System.out.println("Ncat detected at " + HOST + ":" + PORT + ". Ready to receive data...");
         }
 
-        SparkConf conf = new SparkConf().setMaster("local[2]").setAppName("NetworkWordCount");
+        SparkConf conf = new SparkConf()
+                .setMaster("local[2]")
+                .setAppName("NetworkWordCount")
+                .set("spark.ui.showConsoleProgress", "false");
+
         JavaStreamingContext jssc = new JavaStreamingContext(conf, Durations.seconds(1));
 
         // Define the input stream
@@ -61,7 +58,10 @@ public class StreamingSimpleApp {
         JavaDStream<String> words = lines.flatMap(x -> Arrays.asList(x.split(" ")).iterator());
         JavaPairDStream<String, Integer> pairs = words.mapToPair(s -> new Tuple2<>(s, 1));
         JavaPairDStream<String, Integer> wordCounts = pairs.reduceByKey(Integer::sum);
-        wordCounts.print();
+
+        wordCounts.foreachRDD(rdd -> {
+            rdd.collect().forEach(System.out::println);
+        });
 
         // Start Spark Streaming
         try {
